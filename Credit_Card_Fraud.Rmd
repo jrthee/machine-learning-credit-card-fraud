@@ -1,0 +1,111 @@
+---
+title: "Credit Card Fraud Detection"
+output: html_document
+---
+
+### Loading the Data and Libraries
+
+```{r load_data, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(ggcorrplot)
+library(rpart)
+library(rpart.plot)
+library(pROC)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(arules)
+library(caret)
+credit_card_data <- read.csv("creditcard.csv", TRUE, ",")
+```
+
+### Data Preprocessing 
+
+```{r preprocess_data, message=FALSE}
+# visualize raw data
+str(credit_card_data)
+# reorganize columns so that class, time, and amount are first
+credit_card_data <- credit_card_data[,c(31,1,30,2:29)]
+# any missing values?
+sprintf("Number of missing values: %i",sum(is.na(credit_card_data)))
+
+# z-score scaling of Time and Amount
+z_scores_time <- as.data.frame(scale(credit_card_data["Time"]))
+credit_card_data$Time <- z_scores_time$Time
+z_scores_amount <- as.data.frame(scale(credit_card_data["Amount"]))
+credit_card_data$Amount <- z_scores_amount$Amount
+summary(credit_card_data)
+str(credit_card_data)
+
+# save pre-factored data frame into variable for later use 
+num_credit_card_data <- credit_card_data
+
+# convert class variable to factor
+credit_card_data$Class <- factor(credit_card_data$Class)
+# re-visualize data
+str(credit_card_data)
+
+# how many attributes and total transactions?
+sprintf("Number of attributes: %d",length(names(credit_card_data)))
+total_transactions <- nrow(credit_card_data)
+sprintf("Total number of transactions: %d",total_transactions)
+# how many fraud vs non-fraud transactions?
+non_fraud_transactions <- nrow(credit_card_data[credit_card_data$Class==0,])
+sprintf("Number of non-fraud transactions: %d",non_fraud_transactions)
+fraud_transactions <- nrow(credit_card_data[credit_card_data$Class==1,])
+sprintf("Number of fraud transactions: %d",fraud_transactions)
+# percentage of transactions that are fraudulent?
+percent_fraud <- (fraud_transactions / total_transactions) * 100
+sprintf("Percentage of fraud transactions: %f",percent_fraud)
+
+# plot class distributions
+ggplot(credit_card_data, aes(Class))+geom_bar(fill="purple")+ggtitle("Fraudulent vs. Non-Fraudulent Class Distributions")
+```
+
+### Feature Selection
+
+```{r feature_selection, message=FALSE}
+# Does time of transaction have any significance, or should it be removed?
+ggplot(credit_card_data, aes(x=Time,color=Class)) +
+  geom_density() + ggtitle("Transaction Density Plot Over Time\n(0: Non-Fraudulent   1: Fraudulent)")
+
+# Does amount of transaction have any significance, or should it be removed?
+ggplot(credit_card_data, aes(x=Class,y=Amount)) + geom_boxplot(fill="purple") + ggtitle("Transaction Amount Per Class")
+
+# correlation matrix
+correlation <- cor(num_credit_card_data, method="pearson")
+ggcorrplot(correlation)
+
+corrclass <- sort(as.data.frame(cor(num_credit_card_data$Class, num_credit_card_data)), decreasing=F)
+ggcorrplot(corrclass)
+
+# remove features with no correlation, save in new variable
+credit_card_feat_rm <- credit_card_data %>% select(-V13) %>% select(-V15) %>% select(-V22) %>% select(-V23) %>% select(-V24) %>% select(-V25) %>% select(-V26)
+str(credit_card_feat_rm)
+```
+
+### Model Creation and Classification 
+
+```{r model_creation, message=FALSE}
+# split data into training and testing sets (75% train, 25% test)
+set.seed(123)
+split <- createDataPartition(y=credit_card_feat_rm$Class, p=0.75, list=FALSE)
+credit_card_train <- credit_card_feat_rm[split,]
+credit_card_test <- credit_card_feat_rm[-split,]
+
+train_transactions <- nrow(credit_card_train)
+sprintf("Number of transactions in training set: %d",train_transactions)
+test_transactions <- nrow(credit_card_test)
+sprintf("Number of transactions in testing set: %d",test_transactions)
+
+decision_tree_model <- rpart(Class~., data=credit_card_train, method="class", minbucket=25)
+rpart.plot(decision_tree_model)
+
+decision_tree_predict <- predict(decision_tree_model, newdata=credit_card_test, type="class")
+confusionMatrix(decision_tree_predict,credit_card_test$Class)
+
+glm_model <- glm(Class~., data=credit_card_train, family="binomial")
+summary(glm_model)
+glm_predict <- predict(glm_model, newdata=credit_card_test, type="response")
+confusionMatrix(factor(as.numeric(glm_predict>0.5), levels=0:1), credit_card_test$Class)
+```
